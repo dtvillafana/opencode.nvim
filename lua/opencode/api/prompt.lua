@@ -13,7 +13,7 @@ function M.prompt(prompt, context)
       local plaintext = context:render(_prompt).output:plaintext()
 
       if context.server.version == 2 then
-        return require("opencode.api.v2").prompt(context.server, plaintext)
+        return require("opencode.api.v2").prompt(context.server, plaintext, not _prompt:match(" $"))
       end
 
       return context.server:tui_append_prompt(plaintext):next(function()

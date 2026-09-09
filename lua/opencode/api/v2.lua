@@ -132,15 +132,86 @@ local function session(server)
   end)
 end
 
+---@param buf integer
+---@return number?
+local function terminal_chan(buf)
+  if not vim.api.nvim_buf_is_valid(buf) or vim.bo[buf].buftype ~= "terminal" then
+    return nil
+  end
+  local ok, job = pcall(vim.api.nvim_buf_get_var, buf, "terminal_job_id")
+  if not (ok and type(job) == "number" and job > 0) then
+    return nil
+  end
+  local name = vim.api.nvim_buf_get_name(buf)
+  local title = vim.b[buf].term_title
+  if name:find("opencode2", 1, true) or (type(title) == "string" and title:find("opencode2", 1, true)) then
+    return job
+  end
+  local info = vim.api.nvim_get_chan_info(job)
+  for _, arg in ipairs(info.argv or {}) do
+    if tostring(arg):find("opencode2", 1, true) then
+      return job
+    end
+  end
+end
+
+---@return number?
+local function tui_chan()
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    local chan = terminal_chan(vim.api.nvim_win_get_buf(win))
+    if chan then
+      return chan
+    end
+  end
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    local chan = terminal_chan(buf)
+    if chan then
+      return chan
+    end
+  end
+end
+
+---@param text string
+---@param submit? boolean
+---@return boolean
+local function send_to_tui(text, submit)
+  local chan = tui_chan()
+  if not chan then
+    return false
+  end
+  vim.api.nvim_chan_send(chan, text)
+  if submit then
+    vim.api.nvim_chan_send(chan, "\r")
+  end
+  return true
+end
+
 function M.get_health(server)
   return request(server, "/api/health", "GET")
 end
 
-function M.append_prompt()
+function M.append_prompt(_, text)
+  if send_to_tui(text, false) then
+    return require("opencode.promise").resolve(true)
+  end
   return require("opencode.promise").reject("OpenCode V2 cannot append text to a terminal prompt without submitting it")
 end
 
-function M.prompt(server, text)
+---@param server opencode.server.Server
+---@param text string
+---@param submit? boolean
+function M.prompt(server, text, submit)
+  if submit == nil then
+    submit = true
+  end
+  if send_to_tui(text, submit) then
+    return require("opencode.promise").resolve(true)
+  end
+  if not submit then
+    return require("opencode.promise").reject(
+      "OpenCode V2 cannot append text to a terminal prompt without submitting it"
+    )
+  end
   return session(server):next(function(session_id)
     return request(server, "/api/session/" .. session_id .. "/prompt", "POST", { text = text })
   end)
@@ -161,6 +232,11 @@ local unsupported = {
 }
 
 function M.execute_command(server, command)
+  if command == "prompt.submit" and send_to_tui("", true) then
+    return require("opencode.promise").resolve(true)
+  elseif command == "prompt.clear" and send_to_tui("\x15", false) then
+    return require("opencode.promise").resolve(true)
+  end
   if unsupported[command] then
     return require("opencode.promise").reject("OpenCode V2 has no API equivalent for TUI command `" .. command .. "`")
   end
