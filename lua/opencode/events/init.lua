@@ -10,6 +10,9 @@ local M = {}
 ---@param response opencode.server.Event
 ---@param server opencode.server.Server
 function M.emit(response, server)
+  if response.type == "permission.replied" then
+    require("opencode.events.permissions.pending").mark_replied(response, server)
+  end
   if require("opencode.config").opts.events.enabled then
     vim.api.nvim_exec_autocmds("User", {
       pattern = "OpencodeEvent:" .. response.type,
@@ -17,6 +20,8 @@ function M.emit(response, server)
         event = response,
         -- Can't pass metatable through here, so listeners need to reconstruct the server object if they want to use its methods
         url = server.url,
+        version = server.version,
+        managed = server.managed,
       },
     })
   end

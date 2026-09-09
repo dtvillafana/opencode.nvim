@@ -29,16 +29,18 @@ function M.check()
 
   vim.health.start("opencode.nvim [binaries]")
 
-  if vim.fn.executable("opencode") == 1 then
-    local found_version = vim.fn.system("opencode --version")
+  local executable = opts.version == 2 and "opencode2" or "opencode"
+  if vim.fn.executable(executable) == 1 then
+    local found_version = vim.fn.system(executable .. " --version")
     found_version = vim.trim(vim.split(found_version, "\n")[1])
-    vim.health.ok("`opencode` available with version `" .. found_version .. "`.")
+    vim.health.ok("`" .. executable .. "` available with version `" .. found_version .. "`.")
 
-    local found_version_parsed = vim.version.parse(found_version)
-    local minimum_version = "1.17"
-    local minimum_version_parsed = vim.version.parse(minimum_version)
+    local found_version_parsed = opts.version == 1 and vim.version.parse(found_version) or nil
+    local minimum_version = opts.version == 1 and "1.17" or nil
+    local minimum_version_parsed = minimum_version and vim.version.parse(minimum_version) or nil
     if
-      found_version_parsed
+      minimum_version
+      and found_version_parsed
       and minimum_version_parsed
       and vim.version.cmp(found_version_parsed, minimum_version_parsed) < 0
     then
@@ -47,13 +49,13 @@ function M.check()
           .. minimum_version
           .. "`: may cause compatibility issues.",
         {
-          "Update `opencode`.",
+          "Update `" .. executable .. "`.",
         }
       )
     end
   else
-    vim.health.error("`opencode` executable not found in `$PATH`.", {
-      "Install `opencode` and ensure it's in your `$PATH`.",
+    vim.health.error("`" .. executable .. "` executable not found in `$PATH`.", {
+      "Install `" .. executable .. "` and ensure it's in your `$PATH`.",
     })
   end
 
@@ -66,7 +68,7 @@ function M.check()
   end
 
   -- Binaries for auto-finding `opencode` process (Unix only)
-  if vim.fn.has("win32") == 0 and not (opts and opts.server and opts.server.url) then
+  if opts.version == 1 and vim.fn.has("win32") == 0 and not (opts and opts.server and opts.server.url) then
     if vim.fn.executable("pgrep") == 1 then
       vim.health.ok("`pgrep` available.")
     else

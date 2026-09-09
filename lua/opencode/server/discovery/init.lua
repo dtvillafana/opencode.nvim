@@ -107,6 +107,10 @@ end
 ---@return Promise<opencode.server.Server[]>
 function M.locally()
   local Promise = require("opencode.promise")
+  local version = require("opencode.config").opts.version
+  if version == 2 then
+    return require("opencode.api.v2").discover()
+  end
   return require("opencode.server.discovery.process")
     .get()
     :next(function(processes)
@@ -120,7 +124,7 @@ function M.locally()
       -- `all_settled` because we expect non-servers (falsely discovered processes) to reject
       return Promise.all_settled(
         vim.tbl_map(function(process) ---@param process opencode.server.discovery.process.Process
-          return require("opencode.server").new("http://localhost:" .. process.port)
+          return require("opencode.server").new("http://localhost:" .. process.port, 1)
         end, processes)
       )
     end)
@@ -151,13 +155,14 @@ end
 ---
 ---@return Promise<opencode.server.Server>?
 function M.configured()
-  local url = require("opencode.config").opts.server and require("opencode.config").opts.server.url
+  local config = require("opencode.config").opts
+  local url = config.server and config.server.url
   if url == nil then
     return nil
   end
 
   return type(url) == "string"
-      and require("opencode.server").new(url):catch(function()
+      and require("opencode.server").new(url, config.version):catch(function()
         return require("opencode.promise").reject("Failed to connect to configured OpenCode server URL: " .. url)
       end)
     or type(url) == "function"
@@ -172,7 +177,7 @@ function M.configured()
           end)
         end)
         :next(function(resolved_url)
-          return require("opencode.server").new(resolved_url)
+          return require("opencode.server").new(resolved_url, config.version)
         end)
 end
 

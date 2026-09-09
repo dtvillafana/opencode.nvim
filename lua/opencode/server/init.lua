@@ -1,8 +1,8 @@
 ---@class opencode.server.Opts
 ---Full URL of an OpenCode server, e.g. `"http://localhost:4096"`.
 ---Bypasses local process discovery and connects directly.
----You _must_ run `opencode` with the `--port` flag to expose its server.
----If pointing to a headless server, you _must_ attach a TUI via `opencode attach <URL>`.
+---For version 1, you _must_ run `opencode` with the `--port` flag to expose its server.
+---If pointing to a version 1 headless server, you _must_ attach a TUI via `opencode attach <URL>`.
 ---@field url? string | fun(callback: fun(url?: string))
 ---@field connect? boolean Whether to connect to an OpenCode server before interacting with it, listening for events and targeting it for future interactions.
 ---@field username? string Basic auth username.
@@ -15,6 +15,11 @@
 ---@field cwd string
 ---@field title string
 ---@field subagents opencode.server.Agent[]
+---@field version 1 | 2
+---@field managed? boolean Whether OpenCode V2 manages this server and its authentication.
+---@field username? string
+---@field password? string
+---@field session_id? string The selected OpenCode V2 session.
 ---@field subscription_job_id? number
 ---@field heartbeat_timer? uv.uv_timer_t
 local Server = {}
@@ -44,6 +49,7 @@ Server.__index = Server
 ---@field time { created: integer, updated: integer }
 
 ---@class opencode.server.Agent
+---@field id? string
 ---@field name string
 ---@field description string
 ---@field mode "primary" | "subagent"
@@ -57,8 +63,8 @@ Server.__index = Server
 ---Not exhaustive.
 ---@alias opencode.server.Event
 ---| { type: "file.edited" }
----| { type: "permission.asked", properties: { id: number, permission: string, patterns: string[], metadata?: { diff: string, filepath: string } } }
----| { type: "permission.replied", properties: { requestID: number } }
+---| { type: "permission.asked", properties: { id: number | string, sessionID?: string, permission: string, patterns: string[], metadata?: { diff: string, filepath: string } } }
+---| { type: "permission.replied", properties: { requestID: number | string, sessionID?: string } }
 ---| { type: "server.connected" }
 ---| { type: "server.instance.disposed" }
 ---| { type: "session.status", properties: { status: { type: "idle" | "busy" | "error" } } }
@@ -70,10 +76,18 @@ Server.__index = Server
 ---Rejection message is non-empty if from a valid OpenCode server.
 ---
 ---@param url string
+---@param version? 1 | 2
+---@param managed? boolean
+---@param auth? { username?: string, password?: string }
 ---@return Promise<opencode.server.Server>
-function Server.new(url)
+function Server.new(url, version, managed, auth)
   local self = setmetatable({}, Server)
   self.url = url:gsub("/$", "")
+  local selected_version = version or require("opencode.config").opts.version
+  self.version = selected_version == 2 and 2 or 1
+  self.managed = managed
+  self.username = auth and auth.username
+  self.password = auth and auth.password
   self.heartbeat_timer = vim.uv.new_timer()
 
   local Promise = require("opencode.promise")
@@ -94,6 +108,7 @@ function Server.new(url)
       function(results) ---@param results { [1]: { directory: string, worktree: string }, [2]: opencode.server.Session[], [3]: opencode.server.Agent }
         self.cwd = results[1].directory or results[1].worktree
         self.title = results[2][1] and results[2][1].title or "<No sessions>"
+        self.session_id = self.version == 2 and results[2][1] and results[2][1].id or nil
         self.subagents = vim.tbl_filter(function(agent) ---@param agent opencode.server.Agent
           return agent.mode == "subagent"
         end, results[3])
@@ -140,8 +155,8 @@ function Server:curl(path, method, body, on_success, on_error, opts)
     "-N",
   }
 
-  local username = require("opencode.config").opts.server.username
-  local password = require("opencode.config").opts.server.password
+  local username = self.username or require("opencode.config").opts.server.username
+  local password = self.password or require("opencode.config").opts.server.password
   if username and password then
     -- We can always send credentials; servers with no auth set just ignore them
     table.insert(cmd, "--user")
@@ -166,6 +181,10 @@ function Server:curl(path, method, body, on_success, on_error, opts)
       local full_event = table.concat(response_buffer)
       response_buffer = {}
       vim.schedule(function()
+        if full_event == "" then
+          on_success({})
+          return
+        end
         local ok, result = pcall(vim.fn.json_decode, full_event)
         if ok then
           if on_success then
@@ -191,7 +210,9 @@ function Server:curl(path, method, body, on_success, on_error, opts)
         return
       end
       for _, line in ipairs(data) do
-        if line == "" and opts.persistent then
+        if opts.persistent and (line:match("^event:") or line:match("^id:") or line:match("^:")) then
+          -- SSE metadata; event payloads are carried in `data:` lines.
+        elseif line == "" and opts.persistent then
           process_response_buffer()
         else
           local clean_line = (line:gsub("^data: ?", ""))
@@ -236,82 +257,61 @@ end
 
 ---@return Promise<any>
 function Server:get_health()
-  return require("opencode.promise").new(function(resolve, reject)
-    self:curl("/global/health", "GET", nil, resolve, function(msg, _, status)
-      if status == 401 then
-        reject("Unauthorized response from OpenCode at " .. self:display_name())
-      else
-        reject(msg)
-      end
-    end)
-  end)
+  return require("opencode.api.v" .. self.version).get_health(self)
 end
 
 ---@param text string
 ---@return Promise<any>
 function Server:tui_append_prompt(text)
-  return require("opencode.promise").new(function(resolve, reject)
-    self:curl("/tui/publish", "POST", { type = "tui.prompt.append", properties = { text = text } }, resolve, reject)
-  end)
+  return require("opencode.api.v" .. self.version).append_prompt(self, text)
 end
 
 ---@param command opencode.server.Command | string
 ---@return Promise<any>
 function Server:tui_execute_command(command)
-  return require("opencode.promise").new(function(resolve, reject)
-    self:curl(
-      "/tui/publish",
-      "POST",
-      { type = "tui.command.execute", properties = { command = command } },
-      resolve,
-      reject
-    )
-  end)
+  return require("opencode.api.v" .. self.version).execute_command(self, command)
 end
 
----@param permission number
+---@param permission number | string
 ---@param reply opencode.server.PermissionReply
+---@param session_id? string
 ---@return Promise<any>
-function Server:permit(permission, reply)
-  return require("opencode.promise").new(function(resolve, reject)
-    self:curl("/permission/" .. permission .. "/reply", "POST", { reply = reply }, resolve, reject)
-  end)
+function Server:permit(permission, reply, session_id)
+  return require("opencode.api.v" .. self.version).permit(self, permission, reply, session_id)
+end
+
+---@param session_id? string
+---@return Promise<table[]>
+function Server:get_permissions(session_id)
+  return require("opencode.api.v" .. self.version).get_permissions(self, session_id)
 end
 
 ---@return Promise<opencode.server.Agent[]>
 function Server:get_agents()
-  return require("opencode.promise").new(function(resolve, reject)
-    self:curl("/agent", "GET", nil, resolve, reject)
-  end)
+  return require("opencode.api.v" .. self.version).get_agents(self)
 end
 
 ---@return Promise<opencode.server.Session[]>
 function Server:get_sessions()
-  return require("opencode.promise").new(function(resolve, reject)
-    self:curl("/session", "GET", nil, resolve, reject)
-  end)
+  return require("opencode.api.v" .. self.version).get_sessions(self)
 end
 
 ---@param session_id string
 ---@return Promise<any>
 function Server:select_session(session_id)
-  return require("opencode.promise").new(function(resolve, reject)
-    self:curl("/tui/select-session", "POST", { sessionID = session_id }, resolve, reject)
-  end)
+  return require("opencode.api.v" .. self.version).select_session(self, session_id)
 end
 
 ---@return Promise<{ directory: string, worktree: string }>
 function Server:get_path()
-  return require("opencode.promise").new(function(resolve, reject)
-    self:curl("/path", "GET", nil, resolve, reject)
-  end)
+  return require("opencode.api.v" .. self.version).get_path(self)
 end
 
 ---@param on_success fun(response: opencode.server.Event) Invoked with each received event.
 ---@param on_error fun(msg: string?, code: number)
 ---@return number job_id
 function Server:sse_subscribe(on_success, on_error)
-  return self:curl("/event", "GET", nil, on_success, on_error, { persistent = true })
+  return require("opencode.api.v" .. self.version).subscribe(self, on_success, on_error)
 end
 
 ---How often OpenCode sends heartbeat events.
@@ -339,7 +339,7 @@ function Server:connect()
   return Promise.new(function(resolve, reject)
     self.subscription_job_id = self:sse_subscribe(
       function(response)
-        if self.heartbeat_timer then
+        if self.heartbeat_timer and self.version == 1 then
           self.heartbeat_timer:start(
             OPENCODE_HEARTBEAT_INTERVAL_MS + 1000,
             0,
@@ -356,7 +356,14 @@ function Server:connect()
           self:disconnect()
         end
 
-        require("opencode.events").emit(response, self)
+        local same_location = not response.location
+          or not response.location.directory
+          or response.location.directory == self.cwd
+        local session_id = response.properties and response.properties.sessionID
+        local same_session = response.type ~= "session.status" or not session_id or session_id == self.session_id
+        if self.version == 1 or (same_location and same_session) then
+          require("opencode.events").emit(response, self)
+        end
       end,
       -- Server disappeared ungracefully, e.g. process killed, network error, etc.
       -- Also called on manual disconnects, like our `vim.fn.jobstop`.
@@ -368,6 +375,13 @@ function Server:connect()
         end
       end
     )
+
+    if self.version == 2 and not self.password and self.subscription_job_id > 0 then
+      Server.connected = self
+      local event = { type = "server.connected", properties = {} }
+      require("opencode.events").emit(event, self)
+      resolve(self)
+    end
   end)
 end
 

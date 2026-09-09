@@ -16,11 +16,19 @@ vim.api.nvim_create_autocmd("User", {
       return
     end
 
-    require("opencode.server")
-      .new(url)
+    local Server = require("opencode.server")
+    local server = Server.connected
+        and Server.connected.url == url
+        and require("opencode.promise").resolve(Server.connected)
+      or Server.new(url, args.data.version, args.data.managed)
+    server
       :next(function(server)
-        return require("opencode.events.permissions").request(event):next(function(choice)
-          return server:permit(event.properties.id, choice)
+        return require("opencode.events.permissions.pending").check(event, server):next(function(pending)
+          if pending then
+            return require("opencode.events.permissions").request(event):next(function(choice)
+              return server:permit(event.properties.id, choice, event.properties.sessionID)
+            end)
+          end
         end)
       end)
       :catch(function(err)

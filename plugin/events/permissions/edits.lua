@@ -12,12 +12,23 @@ vim.api.nvim_create_autocmd("User", {
       return
     end
 
-    require("opencode.server")
-      .new(url)
+    local Server = require("opencode.server")
+    local server = Server.connected
+        and Server.connected.url == url
+        and require("opencode.promise").resolve(Server.connected)
+      or Server.new(url, args.data.version, args.data.managed)
+    server
       :next(function(server)
-        return require("opencode.events.permissions.edits").diff(event):next(function(reply)
-          if reply then
-            return server:permit(event.properties.id, reply)
+        local pending = event.type == "permission.asked"
+            and require("opencode.events.permissions.pending").check(event, server)
+          or require("opencode.promise").resolve(true)
+        return pending:next(function(is_pending)
+          if is_pending then
+            return require("opencode.events.permissions.edits").diff(event):next(function(reply)
+              if reply then
+                return server:permit(event.properties.id, reply, event.properties.sessionID)
+              end
+            end)
           end
         end)
       end)

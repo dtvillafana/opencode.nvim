@@ -1,4 +1,5 @@
 ---@class opencode.Opts
+---@field version? 1 | 2 OpenCode major version. Version 2 uses the `opencode2` executable and API.
 ---@field server? opencode.server.Opts OpenCode server connection options.
 ---@field contexts? table<string, fun(context: opencode.context.Context): string?> Context placeholders and their builders.
 ---@field ask? opencode.ask.Opts Options for `ask()`. Supports [snacks.input](https://github.com/folke/snacks.nvim/blob/main/docs/input.md).
@@ -18,13 +19,15 @@ local M = {}
 
 ---@type opencode.Opts
 local defaults = {
+  version = 2,
   server = {
     url = nil,
     connect = true,
     username = vim.env.OPENCODE_SERVER_USERNAME or "opencode", -- Same env vars and defaults as OpenCode
     password = vim.env.OPENCODE_SERVER_PASSWORD,
     start = function()
-      vim.cmd("vsplit term://opencode --port | wincmd p")
+      local command = require("opencode.config").opts.version == 2 and "opencode2" or "opencode --port"
+      vim.cmd("vsplit term://" .. command .. " | wincmd p")
     end,
   },
   contexts = {
@@ -121,6 +124,10 @@ local defaults = {
 ---Plugin options, lazily merged from `defaults` and `vim.g.opencode_opts`.
 ---@type opencode.Opts
 M.opts = vim.tbl_deep_extend("force", vim.deepcopy(defaults), vim.g.opencode_opts or {})
+
+if M.opts.version ~= 1 and M.opts.version ~= 2 then
+  error("vim.g.opencode_opts.version must be 1 or 2")
+end
 
 if M.opts.events.reload.enabled then
   local info = vim.api.nvim_get_option_info2("autoread", { scope = "global" })

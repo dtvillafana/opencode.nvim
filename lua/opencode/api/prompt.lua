@@ -12,6 +12,10 @@ function M.prompt(prompt, context)
     :next(function(_prompt)
       local plaintext = context:render(_prompt).output:plaintext()
 
+      if context.server.version == 2 then
+        return require("opencode.api.v2").prompt(context.server, plaintext)
+      end
+
       return context.server:tui_append_prompt(plaintext):next(function()
         if not _prompt:match(" $") then
           return context.server:tui_execute_command("prompt.submit")

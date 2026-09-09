@@ -37,6 +37,7 @@ vim.pack.add({
 
 ---@type opencode.Opts
 vim.g.opencode_opts = {
+  version = 2, -- OpenCode version: 1 for `opencode`, 2 for `opencode2`
   -- Your configuration, if any; goto definition on the type for details
 }
 
@@ -45,8 +46,8 @@ vim.keymap.set({ "n", "x" }, "<C-a>",   function() require("opencode").ask("@thi
 vim.keymap.set({ "n", "x" }, "<C-x>",   function() require("opencode").select() end,                          { desc = "Select OpenCode…" })
 vim.keymap.set({ "n", "x" }, "go",      function() return require("opencode").operator("@this ") end,         { desc = "Append range to OpenCode", expr = true })
 vim.keymap.set({ "n" },      "goo",     function() return require("opencode").operator("@this ") .. "_" end,  { desc = "Append line to OpenCode", expr = true })
-vim.keymap.set({ "n" },      "<S-C-u>", function() require("opencode").command("session.half.page.up") end,   { desc = "Scroll OpenCode up" })
-vim.keymap.set({ "n" },      "<S-C-d>", function() require("opencode").command("session.half.page.down") end, { desc = "Scroll OpenCode down" })
+vim.keymap.set({ "n" },      "<leader>oc", function() require("opencode").command("session.compact") end,     { desc = "Compact OpenCode session" })
+vim.keymap.set({ "n" },      "<leader>oi", function() require("opencode").command("session.interrupt") end,   { desc = "Interrupt OpenCode session" })
 ```
 
 <details>
@@ -59,6 +60,7 @@ vim.keymap.set({ "n" },      "<S-C-d>", function() require("opencode").command("
   config = function()
     ---@type opencode.Opts
     vim.g.opencode_opts = {
+      version = 2, -- OpenCode version: 1 for `opencode`, 2 for `opencode2`
       -- Your configuration, if any; goto definition on the type for details
     }
 
@@ -67,8 +69,8 @@ vim.keymap.set({ "n" },      "<S-C-d>", function() require("opencode").command("
     vim.keymap.set({ "n", "x" }, "<C-x>",   function() require("opencode").select() end,                          { desc = "Select OpenCode…" })
     vim.keymap.set({ "n", "x" }, "go",      function() return require("opencode").operator("@this ") end,         { desc = "Append range to OpenCode", expr = true })
     vim.keymap.set({ "n" },      "goo",     function() return require("opencode").operator("@this ") .. "_" end,  { desc = "Append line to OpenCode", expr = true })
-    vim.keymap.set({ "n" },      "<S-C-u>", function() require("opencode").command("session.half.page.up") end,   { desc = "Scroll OpenCode up" })
-    vim.keymap.set({ "n" },      "<S-C-d>", function() require("opencode").command("session.half.page.down") end, { desc = "Scroll OpenCode down" })
+    vim.keymap.set({ "n" },      "<leader>oc", function() require("opencode").command("session.compact") end,     { desc = "Compact OpenCode session" })
+    vim.keymap.set({ "n" },      "<leader>oi", function() require("opencode").command("session.interrupt") end,   { desc = "Interrupt OpenCode session" })
   end,
 }
 ```
@@ -207,12 +209,21 @@ Select prompts to review, explain, and improve your code:
 
 ### Server
 
-Run `opencode` locally however you like and opencode.nvim will find them! Or point `vim.g.opencode_opts.server.url` to a specific server, including remotes.
+OpenCode V2 is used by default. The plugin asks `opencode2 api` to discover or start its authenticated background service,
+then uses the V2 session API. Set `vim.g.opencode_opts.version = 1` to use the original `opencode` server integration.
+
+For either version, `vim.g.opencode_opts.server.url` can point to a specific server, including remotes.
 
 > [!IMPORTANT]
-> You _must_ run `opencode` with the `--port` flag to expose its server.
+> OpenCode V1 must be run with the `--port` flag to expose its server. This does not apply to OpenCode V2's background service.
 
-If opencode.nvim can't find a running `opencode`, it starts one via `vim.g.opencode_opts.server.start`, defaulting to `term://opencode --port`.
+If opencode.nvim can't find a server, it calls `vim.g.opencode_opts.server.start`. The default opens `opencode2`, or
+`opencode --port` when version 1 is selected.
+
+OpenCode V2 does not expose remote controls for terminal prompt editing or viewport scrolling. Calls that rely on those
+V1-only controls return a descriptive error. Prompts (including prompts with V1's trailing-space append marker), session
+creation/selection, compaction, interrupts, agent cycling, permissions, edits, events, and status use the V2 API directly;
+V2 always submits prompts immediately.
 
 <details>
 <summary>Start via <a href="https://github.com/folke/snacks.nvim/blob/main/docs/terminal.md">snacks.terminal</a></summary>
@@ -229,6 +240,7 @@ local snacks_terminal_opts = {
 
 ---@type opencode.Opts
 vim.g.opencode_opts = {
+  version = 1,
   server = {
     start = function()
       require('snacks.terminal').open(opencode_cmd, snacks_terminal_opts)
